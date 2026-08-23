@@ -1,0 +1,143 @@
+import * as THREE from "three";
+
+export class FogOfWar {
+  readonly texture: THREE.CanvasTexture;
+  readonly canvas: HTMLCanvasElement;
+  readonly ctx: CanvasRenderingContext2D;
+  readonly originX: number;
+  readonly originZ: number;
+  readonly size: number;
+  readonly uniforms: {
+    uFogMap: { value: THREE.CanvasTexture };
+    uFogOrigin: { value: THREE.Vector2 };
+    uFogSize: { value: number };
+  };
+  private lastX = Infinity;
+  private lastZ = Infinity;
+  revealed = 0;
+  private readonly res: number;
+  private readonly pixels: Uint8ClampedArray;
+
+  constructor(originX: number, originZ: number, size: number, res = 512) {
+    this.originX = originX;
+    this.originZ = originZ;
+    this.size = size;
+    this.res = res;
+    this.canvas = document.createElement("canvas");
+    this.canvas.width = res;
+    this.canvas.height = res;
+    this.ctx = this.canvas.getContext("2d", { willReadFrequently: true })!;
+    this.ctx.fillStyle = "#000";
+    this.ctx.fillRect(0, 0, res, res);
+    this.pixels = new Uint8ClampedArray(res * res);
+    this.texture = new THREE.CanvasTexture(this.canvas);
+    this.texture.flipY = false;
+    this.texture.magFilter = THREE.LinearFilter;
+    this.texture.minFilter = THREE.LinearFilter;
+    this.texture.wrapS = THREE.ClampToEdgeWrapping;
+    this.texture.wrapT = THREE.ClampToEdgeWrapping;
+    this.uniforms = {
+      uFogMap: { value: this.texture },
+      uFogOrigin: { value: new THREE.Vector2(originX, originZ) },
+      uFogSize: { value: size },
+    };
+  }
+
+  sample(x: number, z: number) {
+    const u = (x - this.originX) / this.size + 0.5;
+    const v = (z - this.originZ) / this.size + 0.5;
+    if (u < 0 || v < 0 || u > 1 || v > 1) return 0;
+    const px = Math.min(this.res - 1, Math.max(0, Math.floor(u * this.res)));
+    const py = Math.min(this.res - 1, Math.max(0, Math.floor(v * this.res)));
+    return this.pixels[py * this.res + px]! / 255;
+  }
+
+  stamp(x: number, z: number, radiusM: number) {
+    if (Math.hypot(x - this.lastX, z - this.lastZ) < 1.6) return;
+    this.lastX = x;
+    this.lastZ = z;
+    const u = (x - this.originX) / this.size + 0.5;
+    const v = (z - this.originZ) / this.size + 0.5;
+    const r = (radiusM / this.size) * this.res;
+    const cx = u * this.res;
+    const cy = v * this.res;
+    const g = this.ctx.createRadialGradient(cx, cy, r * 0.22, cx, cy, r);
+    g.addColorStop(0, "rgba(255,255,255,1)");
+    g.addColorStop(0.55, "rgba(255,255,255,0.85)");
+    g.addColorStop(1, "rgba(255,255,255,0)");
+    this.ctx.globalCompositeOperation = "lighter";
+    this.ctx.fillStyle = g;
+    this.ctx.beginPath();
+    this.ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    this.ctx.fill();
+    this.texture.needsUpdate = true;
+
+    const x0 = Math.max(0, Math.floor(cx - r));
+    const x1 = Math.min(this.res - 1, Math.ceil(cx + r));
+    const y0 = Math.max(0, Math.floor(cy - r));
+    const y1 = Math.min(this.res - 1, Math.ceil(cy + r));
+    const img = this.ctx.getImageData(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+    for (let yy = y0; yy <= y1; yy++) {
+      for (let xx = x0; xx <= x1; xx++) {
+        const i = ((yy - y0) * (x1 - x0 + 1) + (xx - x0)) * 4;
+        this.pixels[yy * this.res + xx] = img.data[i] ?? 0;
+      }
+    }
+    this.revealed = Math.min(1, this.revealed + ((radiusM * radiusM) / (this.size * this.size)) * 0.12);
+  }
+
+  revealAll() {
+    this.ctx.globalCompositeOperation = "source-over";
+    this.ctx.fillStyle = "#fff";
+    this.ctx.fillRect(0, 0, this.res, this.res);
+    this.texture.needsUpdate = true;
+    this.pixels.fill(255);
+    this.revealed = 1;
+  }
+
+  apply(material: THREE.Material) {
+    const uniforms = this.uniforms;
+    material.onBeforeCompile = (shader) => {
+      shader.uniforms.uFogMap = uniforms.uFogMap;
+      shader.uniforms.uFogOrigin = uniforms.uFogOrigin;
+      shader.uniforms.uFogSize = uniforms.uFogSize;
+      shader.vertexShader = shader.vertexShader
+        .replace(
+          "#include <common>",
+          `#include <common>
+varying vec3 vFogPos;`,
+        )
+        .replace(
+          "#include <begin_vertex>",
+          `#include <begin_vertex>
+vFogPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`,
+        );
+      shader.fragmentShader = shader.fragmentShader
+        .replace(
+          "#include <common>",
+          `#include <common>
+varying vec3 vFogPos;
+uniform sampler2D uFogMap;
+uniform vec2 uFogOrigin;
+uniform float uFogSize;`,
+        )
+        .replace(
+          "#include <dithering_fragment>",
+          `vec2 fu = (vFogPos.xz - uFogOrigin) / uFogSize + 0.5;
+float reveal = 0.0;
+if (fu.x > 0.001 && fu.y > 0.001 && fu.x < 0.999 && fu.y < 0.999) {
+  reveal = texture2D(uFogMap, fu).r;
+}
+vec3 fogC = vec3(0.048, 0.051, 0.055);
+gl_FragColor.rgb = mix(fogC, gl_FragColor.rgb, reveal);
+#include <dithering_fragment>`,
+        );
+    };
+    material.customProgramCacheKey = () => "veilway-fog-v1";
+    material.needsUpdate = true;
+  }
+
+  dispose() {
+    this.texture.dispose();
+  }
+}
