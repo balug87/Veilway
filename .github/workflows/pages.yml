@@ -5,17 +5,18 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Project Pages is published from the gh-pages branch (legacy). The official
+# actions/deploy-pages flow cannot create the Pages site with this token;
+# pushing the branch does, and GitHub builds it automatically.
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  build:
+  deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,21 +26,11 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build:pages
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+      - name: Publish gh-pages
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          path: dist/client
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      # Creates the Pages site on first run so Settings → Pages is not required.
-      - uses: actions/configure-pages@v5
-        with:
-          enablement: true
-      - id: deployment
-        uses: actions/deploy-pages@v4
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: dist/client
+          force_orphan: true
+          enable_jekyll: false
+          exclude_assets: "__grok,_shell.html"

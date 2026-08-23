@@ -79,7 +79,7 @@ npm run dev          # local preview
 npm run build:pages  # static site for GitHub Pages
 ```
 
-Hosted on GitHub Pages: [https://balug87.github.io/Veilway/](https://balug87.github.io/Veilway/). Each push to `main` rebuilds the site.
+Hosted on GitHub Pages from the `gh-pages` branch: [https://balug87.github.io/Veilway/](https://balug87.github.io/Veilway/). Each push to `main` rebuilds the site.
 
 OSM/Overpass/OSRM are public endpoints. They can be slow or rate-limit; the Practice district always works offline.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const candidates = ["dist/client", "dist", ".output/public", "build/client"];
@@ -28,4 +28,7 @@ if (!existsSync(join(dest, "index.html"))) {
 
 writeFileSync(join(dest, ".nojekyll"), "");
 copyFileSync(join(dest, "index.html"), join(dest, "404.html"));
+for (const extra of ["__grok", "_shell.html"]) {
+  rmSync(join(dest, extra), { recursive: true, force: true });
+}
 console.log(JSON.stringify({ ok: true, from: root, dest, files: readdirSync(dest).slice(0, 24) }));
