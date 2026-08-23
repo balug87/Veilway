@@ -4,6 +4,8 @@ Third-person night driving through **real OpenStreetMap streets**. The map stays
 
 Reach the destination and the trip is scored against the **shortest legal driving route** from OSM/OSRM.
 
+**Play it here:** this is the Grok App Builder source. Clone, `npm install`, `npm run dev`.
+
 ## Play
 
 - **Start from** a neighborhood (Covent Garden, Gion, Jordaan, …) or jump into the **Practice district** (instant named grid, no network).
@@ -50,6 +52,20 @@ A square canvas covering the map is stamped with a soft circle (~54 m) as the ca
 ### Driving
 
 Arcade model, not a rigid-body sim: heading + forward speed + extra drag off-pavement, steering scaled by speed (and flipped in reverse). Buildings are AABB pushes. Red lights cap speed on approach; passing one at speed while it is red is a violation.
+
+## Build notes
+
+These are the things that actually mattered while shipping the first playable:
+
+- **Steer polarity.** `KeyA` is `steer = +1` → **+yaw**. With `forward = (-sin(yaw), 0, -cos(yaw))` that turns the nose left on screen. Overlay injects (for QA) sit *on top of* keys; an early-return in `injectSteer` used to zero throttle and made A/D tests look broken.
+- **Clock, not Timer.** Three.js r185 ships `THREE.Clock`. `THREE.Timer` is not on `three.module.js` exports. Call `getDelta()` once per frame.
+- **Map fetch.** Overpass `kumi` / `.de` mirrors flake; `overpass-api.de` and the france mirror are more reliable. If JSON Overpass dies, fall back to OSM API 0.6 XML and parse with a named-entity regex (`decodeXml`) — XML entity tools can corrupt `"` strings.
+- **World size.** Destinations are capped at ~1.5 km so the fog canvas (512²) still has usable texel density and the trip is finishable in a few minutes.
+- **Fog shader.** One `MeshStandardMaterial.onBeforeCompile` chunk samples the fog canvas. Street-name sprites keep `depthTest: true` so they sit on the road instead of floating through buildings.
+- **Session phases.** The 3D canvas only mounts in `playing`. Set `phase = playing` *after* the world is built, otherwise the first frame has no car and the loading screen never yields.
+- **QA hooks.** `window.__controlsTest` plus `scripts/veilway-controls-qa.mjs` / `scripts/veilway-osm-qa.mjs`. Practice district is the offline golden path; Covent Garden (Floral Street → Bloomsbury Way) is the live OSM check.
+- **Score vs path.** Driven polyline is sampled from the car; shortest is OSRM (fallback A*). The cream line vs dashed green overlay is the whole “how close were you” readout.
+- **Auth/DB off.** High score is session-only. `localStorage` would not justify accounts.
 
 ## Stack
 
