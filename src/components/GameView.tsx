@@ -36,7 +36,7 @@ export function GameView({ world, onAgain, onMenu }: Props) {
   }, [world]);
 
   return (
-    <div className="relative h-dvh w-full overflow-hidden bg-bg">
+    <div className="relative h-dvh w-full overflow-hidden bg-bg" data-engine="street-lit-v4">
       <canvas ref={canvasRef} className="block h-full w-full touch-none" />
       <Hud />
       <TouchPad input={input} visible={phase === "playing"} />

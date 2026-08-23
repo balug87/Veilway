@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import * as BufferGeometryUtils from "three/addons/utils/BufferGeometryUtils.js";
+import { distPointSeg } from "@/lib/osm/project";
 import type { Building, Road, TrafficLight } from "@/lib/osm/types";
 import type { FogOfWar } from "./fog";
 
@@ -56,7 +57,7 @@ export function buildWorld(opts: {
   const { fog } = opts;
 
   const groundMat = new THREE.MeshStandardMaterial({
-    color: 0x121316,
+    color: 0x16181c,
     roughness: 1,
     metalness: 0,
   });
@@ -76,13 +77,13 @@ export function buildWorld(opts: {
   }
 
   const roadMatMajor = new THREE.MeshStandardMaterial({
-    color: 0x2c2e33,
-    roughness: 0.86,
+    color: 0xb7bdc6,
+    roughness: 0.82,
     metalness: 0,
   });
   const roadMatMinor = new THREE.MeshStandardMaterial({
-    color: 0x26282c,
-    roughness: 0.9,
+    color: 0xa8aeb8,
+    roughness: 0.88,
     metalness: 0,
   });
   fog.apply(roadMatMajor);
@@ -134,25 +135,35 @@ export function buildWorld(opts: {
 
   const lampGeo = new THREE.CylinderGeometry(0.08, 0.1, 5.2, 6);
   const lampMat = new THREE.MeshStandardMaterial({ color: 0x2a2c30, roughness: 0.6 });
-  const lampHeadGeo = new THREE.SphereGeometry(0.18, 8, 6);
+  fog.apply(lampMat);
+  const lampHeadGeo = new THREE.SphereGeometry(0.22, 8, 6);
   const lampHeadMat = new THREE.MeshStandardMaterial({
-    color: 0xddd6c8,
-    emissive: 0xcfc6b4,
-    emissiveIntensity: 0.55,
+    color: 0xfff1d6,
+    emissive: 0xffe4b5,
+    emissiveIntensity: 2.4,
   });
+  fog.apply(lampHeadMat);
   const lampPos: THREE.Vector3[] = [];
   let lampCount = 0;
   for (const road of opts.roads) {
     let acc = 0;
+    let side = 1;
     for (let i = 1; i < road.points.length; i++) {
       const a = road.points[i - 1]!;
       const b = road.points[i]!;
       const len = Math.hypot(b.x - a.x, b.z - a.z);
       acc += len;
-      if (acc > 46 && lampCount < 180) {
+      if (acc > 38 && lampCount < 220) {
         acc = 0;
-        lampPos.push(new THREE.Vector3(a.x, 0, a.z));
+        let dx = b.x - a.x;
+        let dz = b.z - a.z;
+        const sl = Math.hypot(dx, dz) || 1;
+        dx /= sl;
+        dz /= sl;
+        const curb = road.width * 0.5 + 0.95;
+        lampPos.push(new THREE.Vector3(a.x - dz * curb * side, 0, a.z + dx * curb * side));
         lampCount++;
+        side *= -1;
       }
     }
   }
@@ -174,43 +185,115 @@ export function buildWorld(opts: {
   const lightGroups: THREE.Group[] = [];
   for (const tl of opts.lights) {
     const g = makeSignal();
-    g.position.set(tl.x, 0, tl.z);
+    const curb = curbBeside(opts.roads, tl.x, tl.z);
+    g.position.set(curb.x, 0, curb.z);
+    g.visible = false;
     group.add(g);
     lightGroups.push(g);
   }
 
-  return { group, lightGroups };
+  return { group, lightGroups, lampPos };
+}
+
+function curbBeside(roads: Road[], x: number, z: number) {
+  let bestDist = Infinity;
+  let out = { x: x + 3.2, z: z + 3.2 };
+  for (const road of roads) {
+    const pts = road.points;
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1]!;
+      const b = pts[i]!;
+      const hit = distPointSeg(x, z, a.x, a.z, b.x, b.z);
+      if (hit.dist >= bestDist) continue;
+      bestDist = hit.dist;
+      let dx = b.x - a.x;
+      let dz = b.z - a.z;
+      const len = Math.hypot(dx, dz) || 1;
+      dx /= len;
+      dz /= len;
+      const d = road.width * 0.5 + 1.2;
+      out = { x: hit.x - dz * d, z: hit.z + dx * d };
+    }
+  }
+  return out;
+}
+
+let glowTex: THREE.CanvasTexture | null = null;
+
+function glowTexture() {
+  if (glowTex) return glowTex;
+  const c = document.createElement("canvas");
+  c.width = 64;
+  c.height = 64;
+  const ctx = c.getContext("2d")!;
+  const g = ctx.createRadialGradient(32, 32, 2, 32, 32, 30);
+  g.addColorStop(0, "rgba(255,255,255,1)");
+  g.addColorStop(0.28, "rgba(255,255,255,0.55)");
+  g.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 64, 64);
+  glowTex = new THREE.CanvasTexture(c);
+  glowTex.colorSpace = THREE.SRGBColorSpace;
+  return glowTex;
 }
 
 function makeSignal() {
   const g = new THREE.Group();
-  const pole = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.09, 0.12, 4.6, 6),
-    new THREE.MeshStandardMaterial({ color: 0x2a2c30, roughness: 0.55 }),
-  );
+  const poleMat = new THREE.MeshStandardMaterial({ color: 0x2a2c30, roughness: 0.55, fog: false });
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 4.6, 6), poleMat);
   pole.position.y = 2.3;
   g.add(pole);
+
+  const head = new THREE.Group();
   const housing = new THREE.Mesh(
-    new THREE.BoxGeometry(0.32, 0.95, 0.22),
-    new THREE.MeshStandardMaterial({ color: 0x111214, roughness: 0.4 }),
+    new THREE.BoxGeometry(0.36, 1.05, 0.26),
+    new THREE.MeshStandardMaterial({ color: 0x111214, roughness: 0.4, fog: false }),
   );
-  housing.position.set(0.28, 4.15, 0);
-  g.add(housing);
+  housing.position.set(0.32, 4.2, 0);
+  head.add(housing);
+
   const mk = (y: number, color: number) => {
     const m = new THREE.MeshStandardMaterial({
       color,
       emissive: color,
       emissiveIntensity: 0.2,
+      fog: false,
+      side: THREE.DoubleSide,
     });
-    const mesh = new THREE.Mesh(new THREE.CircleGeometry(0.09, 12), m);
-    mesh.position.set(0.4, y, 0);
+    const mesh = new THREE.Mesh(new THREE.CircleGeometry(0.13, 16), m);
+    mesh.position.set(0.46, y, 0);
     mesh.rotation.y = Math.PI / 2;
-    g.add(mesh);
+    head.add(mesh);
+    const back = mesh.clone();
+    back.material = m;
+    back.rotation.y = -Math.PI / 2;
+    back.position.x = 0.18;
+    head.add(back);
     return m;
   };
-  g.userData.red = mk(4.42, 0xc45c4a);
-  g.userData.yellow = mk(4.15, 0xc4a574);
-  g.userData.green = mk(3.88, 0x7d9a78);
+  g.userData.red = mk(4.5, 0xc45c4a);
+  g.userData.yellow = mk(4.2, 0xc4a574);
+  g.userData.green = mk(3.9, 0x7d9a78);
+
+  const glow = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: glowTexture(),
+      color: 0xc45c4a,
+      blending: THREE.AdditiveBlending,
+      transparent: true,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  glow.position.set(0.4, 4.35, 0);
+  glow.scale.set(4.2, 4.2, 1);
+  glow.renderOrder = 6;
+  glow.visible = false;
+  head.add(glow);
+
+  g.add(head);
+  g.userData.head = head;
+  g.userData.glow = glow;
   return g;
 }
 
@@ -218,7 +301,13 @@ export function setSignal(group: THREE.Group, state: "red" | "yellow" | "green")
   const red = group.userData.red as THREE.MeshStandardMaterial;
   const yellow = group.userData.yellow as THREE.MeshStandardMaterial;
   const green = group.userData.green as THREE.MeshStandardMaterial;
-  red.emissiveIntensity = state === "red" ? 3.2 : 0.12;
-  yellow.emissiveIntensity = state === "yellow" ? 2.4 : 0.12;
-  green.emissiveIntensity = state === "green" ? 2.8 : 0.12;
+  red.emissiveIntensity = state === "red" ? 3.6 : 0.12;
+  yellow.emissiveIntensity = state === "yellow" ? 2.8 : 0.12;
+  green.emissiveIntensity = state === "green" ? 3.2 : 0.12;
+  const glow = group.userData.glow as THREE.Sprite | undefined;
+  if (glow) {
+    const mat = glow.material;
+    const hex = state === "red" ? 0xe07060 : state === "yellow" ? 0xe0c080 : 0x8fbf88;
+    mat.color.setHex(hex);
+  }
 }

@@ -4,7 +4,9 @@ Third-person night driving through **real OpenStreetMap streets**. The map stays
 
 Reach the destination and the trip is scored against the **shortest legal driving route** from OSM/OSRM.
 
-**Play it here:** this is the Grok App Builder source. Clone, `npm install`, `npm run dev`.
+**Play it here:** [balug87.github.io/Veilway](https://balug87.github.io/Veilway/)
+
+Practice district works offline. Live OSM trips talk to public Overpass / Photon / OSRM from the browser (GitHub Pages is static).
 
 ## Play
 
@@ -41,7 +43,7 @@ src/
 
 ### Map data
 
-`buildTrip` (TanStack `createServerFn`) geocodes the start, downloads streets/buildings/signals in a radius, snaps start & dest onto the graph, then asks OSRM for the official driving distance. Overpass mirrors are tried first; if they time out, the official OSM map API is the fallback.
+`buildTrip` geocodes the start in the browser, downloads streets/buildings/signals in a radius, snaps start & dest onto the graph, then asks OSRM for the official driving distance. Overpass mirrors are tried first; if they time out, the official OSM map API is the fallback.
 
 Projection is local meters: **+X east, −Z north**, so yaw `0` faces north and matches the chase camera (`forward = (-sin(yaw), 0, -cos(yaw))`). **A increases yaw** (nose left on screen).
 
@@ -73,9 +75,11 @@ React 19 + TanStack Start + Tailwind v4 + Three.js. Auth and the database are **
 
 ```
 npm install
-npm run dev      # 0.0.0.0:8080
-npm run build
+npm run dev          # local preview
+npm run build:pages  # static site for GitHub Pages
 ```
+
+Hosted on GitHub Pages: [https://balug87.github.io/Veilway/](https://balug87.github.io/Veilway/). Each push to `main` rebuilds the site.
 
 OSM/Overpass/OSRM are public endpoints. They can be slow or rate-limit; the Practice district always works offline.
 

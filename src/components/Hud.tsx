@@ -27,6 +27,7 @@ export function Hud() {
             <span className="mx-1.5 text-subtle">·</span>
             <span className="font-mono tabular-nums">{Math.round(hud.destDist)} m</span>
           </p>
+          <p className="mt-1 text-[11px] text-accent">Stay on the pale street</p>
         </div>
         <div className="flex items-start gap-2">
           <div className="rounded-lg border border-border bg-bg/80 px-3 py-2 text-right backdrop-blur-sm">

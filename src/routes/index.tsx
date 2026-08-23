@@ -53,12 +53,10 @@ function Home() {
     try {
       setLoading("Downloading streets from OpenStreetMap…");
       const next = await buildTrip({
-        data: {
-          startQuery: opts.startQuery,
-          destMode: opts.destMode,
-          destQuery: opts.destQuery,
-          randomMeters: opts.randomMeters,
-        },
+        startQuery: opts.startQuery,
+        destMode: opts.destMode,
+        destQuery: opts.destQuery,
+        randomMeters: opts.randomMeters,
       });
       playWorld(next);
     } catch (err) {

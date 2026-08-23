@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import type { Vec2 } from "@/lib/osm/types";
 
 export class FogOfWar {
   readonly texture: THREE.CanvasTexture;
@@ -9,6 +10,7 @@ export class FogOfWar {
   readonly size: number;
   readonly uniforms: {
     uFogMap: { value: THREE.CanvasTexture };
+    uLaneMap: { value: THREE.CanvasTexture };
     uFogOrigin: { value: THREE.Vector2 };
     uFogSize: { value: number };
   };
@@ -17,6 +19,9 @@ export class FogOfWar {
   revealed = 0;
   private readonly res: number;
   private readonly pixels: Uint8ClampedArray;
+  private readonly laneCanvas: HTMLCanvasElement;
+  private readonly laneCtx: CanvasRenderingContext2D;
+  private readonly laneTexture: THREE.CanvasTexture;
 
   constructor(originX: number, originZ: number, size: number, res = 512) {
     this.originX = originX;
@@ -36,11 +41,30 @@ export class FogOfWar {
     this.texture.minFilter = THREE.LinearFilter;
     this.texture.wrapS = THREE.ClampToEdgeWrapping;
     this.texture.wrapT = THREE.ClampToEdgeWrapping;
+
+    this.laneCanvas = document.createElement("canvas");
+    this.laneCanvas.width = res;
+    this.laneCanvas.height = res;
+    this.laneCtx = this.laneCanvas.getContext("2d")!;
+    this.laneTexture = new THREE.CanvasTexture(this.laneCanvas);
+    this.laneTexture.flipY = false;
+    this.laneTexture.magFilter = THREE.LinearFilter;
+    this.laneTexture.minFilter = THREE.LinearFilter;
+    this.laneTexture.wrapS = THREE.ClampToEdgeWrapping;
+    this.laneTexture.wrapT = THREE.ClampToEdgeWrapping;
+
     this.uniforms = {
       uFogMap: { value: this.texture },
+      uLaneMap: { value: this.laneTexture },
       uFogOrigin: { value: new THREE.Vector2(originX, originZ) },
       uFogSize: { value: size },
     };
+  }
+
+  private toPx(x: number, z: number) {
+    const u = (x - this.originX) / this.size + 0.5;
+    const v = (z - this.originZ) / this.size + 0.5;
+    return { cx: u * this.res, cy: v * this.res, u, v };
   }
 
   sample(x: number, z: number) {
@@ -56,11 +80,8 @@ export class FogOfWar {
     if (Math.hypot(x - this.lastX, z - this.lastZ) < 1.6) return;
     this.lastX = x;
     this.lastZ = z;
-    const u = (x - this.originX) / this.size + 0.5;
-    const v = (z - this.originZ) / this.size + 0.5;
+    const { cx, cy } = this.toPx(x, z);
     const r = (radiusM / this.size) * this.res;
-    const cx = u * this.res;
-    const cy = v * this.res;
     const g = this.ctx.createRadialGradient(cx, cy, r * 0.22, cx, cy, r);
     g.addColorStop(0, "rgba(255,255,255,1)");
     g.addColorStop(0.55, "rgba(255,255,255,0.85)");
@@ -86,6 +107,55 @@ export class FogOfWar {
     this.revealed = Math.min(1, this.revealed + ((radiusM * radiusM) / (this.size * this.size)) * 0.12);
   }
 
+  setLane(points: Vec2[], widthM: number, punches?: { x: number; z: number; r: number }[]) {
+    const ctx = this.laneCtx;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, this.res, this.res);
+    ctx.globalCompositeOperation = "source-over";
+    this.strokeCorridor(ctx, points, widthM + 4, 1);
+    if (punches) {
+      ctx.globalCompositeOperation = "lighter";
+      for (const p of punches) {
+        const { cx, cy } = this.toPx(p.x, p.z);
+        const r = Math.max(6, (p.r / this.size) * this.res);
+        const g = ctx.createRadialGradient(cx, cy, r * 0.15, cx, cy, r);
+        g.addColorStop(0, "rgba(255,255,255,1)");
+        g.addColorStop(0.55, "rgba(255,255,255,0.55)");
+        g.addColorStop(1, "rgba(255,255,255,0)");
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    this.laneTexture.needsUpdate = true;
+  }
+
+  /** Permanently reveal a road corridor in the explored-fog map. */
+  revealCorridor(points: Vec2[], widthM: number) {
+    if (points.length < 2) return;
+    this.ctx.globalCompositeOperation = "lighter";
+    this.strokeCorridor(this.ctx, points, widthM + 3.2, 1);
+    this.texture.needsUpdate = true;
+  }
+
+  private strokeCorridor(ctx: CanvasRenderingContext2D, points: Vec2[], widthM: number, alpha: number) {
+    if (points.length < 2) return;
+    const w = Math.max(16, (widthM / this.size) * this.res);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.lineWidth = w;
+    ctx.strokeStyle = `rgba(255,255,255,${alpha})`;
+    ctx.beginPath();
+    const p0 = this.toPx(points[0]!.x, points[0]!.z);
+    ctx.moveTo(p0.cx, p0.cy);
+    for (let i = 1; i < points.length; i++) {
+      const p = this.toPx(points[i]!.x, points[i]!.z);
+      ctx.lineTo(p.cx, p.cy);
+    }
+    ctx.stroke();
+  }
+
   revealAll() {
     this.ctx.globalCompositeOperation = "source-over";
     this.ctx.fillStyle = "#fff";
@@ -93,12 +163,15 @@ export class FogOfWar {
     this.texture.needsUpdate = true;
     this.pixels.fill(255);
     this.revealed = 1;
+    this.laneCtx.clearRect(0, 0, this.res, this.res);
+    this.laneTexture.needsUpdate = true;
   }
 
   apply(material: THREE.Material) {
     const uniforms = this.uniforms;
     material.onBeforeCompile = (shader) => {
       shader.uniforms.uFogMap = uniforms.uFogMap;
+      shader.uniforms.uLaneMap = uniforms.uLaneMap;
       shader.uniforms.uFogOrigin = uniforms.uFogOrigin;
       shader.uniforms.uFogSize = uniforms.uFogSize;
       shader.vertexShader = shader.vertexShader
@@ -118,6 +191,7 @@ vFogPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`,
           `#include <common>
 varying vec3 vFogPos;
 uniform sampler2D uFogMap;
+uniform sampler2D uLaneMap;
 uniform vec2 uFogOrigin;
 uniform float uFogSize;`,
         )
@@ -125,19 +199,25 @@ uniform float uFogSize;`,
           "#include <dithering_fragment>",
           `vec2 fu = (vFogPos.xz - uFogOrigin) / uFogSize + 0.5;
 float reveal = 0.0;
+float lane = 0.0;
 if (fu.x > 0.001 && fu.y > 0.001 && fu.x < 0.999 && fu.y < 0.999) {
   reveal = texture2D(uFogMap, fu).r;
+  lane = texture2D(uLaneMap, fu).r;
 }
-vec3 fogC = vec3(0.048, 0.051, 0.055);
-gl_FragColor.rgb = mix(fogC, gl_FragColor.rgb, reveal);
+reveal = max(reveal, lane);
+vec3 fogC = vec3(0.035, 0.037, 0.04);
+vec3 pavement = vec3(0.93, 0.90, 0.82);
+vec3 shown = mix(gl_FragColor.rgb, pavement, clamp(lane * 1.15, 0.0, 1.0));
+gl_FragColor.rgb = mix(fogC, shown, reveal);
 #include <dithering_fragment>`,
         );
     };
-    material.customProgramCacheKey = () => "veilway-fog-v1";
+    material.customProgramCacheKey = () => "veilway-fog-v4";
     material.needsUpdate = true;
   }
 
   dispose() {
     this.texture.dispose();
+    this.laneTexture.dispose();
   }
 }

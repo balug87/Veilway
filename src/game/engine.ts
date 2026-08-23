@@ -1,12 +1,13 @@
 import * as THREE from "three";
 import { currentStreetName, nearestOnRoads } from "@/lib/osm/pathfind";
-import type { Building, WorldData } from "@/lib/osm/types";
+import type { Building, Vec2, WorldData } from "@/lib/osm/types";
 import { useSession, type LightKind, type Score } from "@/store/session";
 import { EngineAudio } from "./audio";
 import { makeCar } from "./car-mesh";
 import { FogOfWar } from "./fog";
 import { Input } from "./input";
 import { makeStreetLabels, updateLabels } from "./labels";
+import { collectStreetAhead, createStreetPreview, distToPolyline, updateStreetPreview, type StreetPreview } from "./street-preview";
 import { buildWorld, setSignal } from "./world-mesh";
 
 const FIXED = 1 / 60;
@@ -19,6 +20,7 @@ const CAR_RADIUS = 1.15;
 const ARRIVE = 18;
 const FOG_RADIUS = 54;
 const CYCLE = 34;
+const LIGHT_SEE = 88;
 
 export type ControlsProbe = {
   getYaw: () => number;
@@ -51,8 +53,14 @@ export class GameEngine {
   private world: WorldData;
   private buildings: Building[];
   private lightGroups: THREE.Group[];
+  private lampPos: THREE.Vector3[] = [];
+  private curbLamps: THREE.PointLight[] = [];
   private labels: ReturnType<typeof makeStreetLabels>;
   private destMarker: THREE.Group;
+  private preview: StreetPreview;
+  private previewPts: Vec2[] = [];
+  private previewAcc = 0;
+  private previewKey = "";
   private playerLine: THREE.Line | null = null;
   private bestLine: THREE.Line | null = null;
   private clock = new THREE.Clock();
@@ -98,19 +106,19 @@ export class GameEngine {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMappingExposure = 1.35;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x0a0b0d);
-    this.scene.fog = new THREE.FogExp2(0x0c0d10, 0.018);
+    this.scene.fog = new THREE.Fog(0x0a0b0d, 150, 320);
 
-    this.camera = new THREE.PerspectiveCamera(58, canvas.clientWidth / Math.max(1, canvas.clientHeight), 0.15, 280);
+    this.camera = new THREE.PerspectiveCamera(58, canvas.clientWidth / Math.max(1, canvas.clientHeight), 0.15, 340);
     this.camPos.set(this.x, 5.4, this.z + 12);
     this.camera.position.copy(this.camPos);
 
-    this.scene.add(new THREE.HemisphereLight(0xb8c4ce, 0x1a1c20, 0.55));
-    const moon = new THREE.DirectionalLight(0xd5dbe3, 0.55);
+    this.scene.add(new THREE.HemisphereLight(0xc5cdd6, 0x1a1c20, 0.85));
+    const moon = new THREE.DirectionalLight(0xe4e8ee, 0.8);
     moon.position.set(-40, 70, 20);
     moon.castShadow = true;
     moon.shadow.mapSize.set(1024, 1024);
@@ -132,6 +140,15 @@ export class GameEngine {
     });
     this.scene.add(built.group);
     this.lightGroups = built.lightGroups;
+    this.lampPos = built.lampPos;
+    for (let i = 0; i < 4; i++) {
+      const pl = new THREE.PointLight(0xffe2b0, 0, 22, 1.7);
+      this.scene.add(pl);
+      this.curbLamps.push(pl);
+    }
+
+    this.preview = createStreetPreview();
+    this.scene.add(this.preview.group);
 
     this.labels = makeStreetLabels(world.roads);
     this.scene.add(this.labels.group);
@@ -141,9 +158,9 @@ export class GameEngine {
     this.carMesh.rotation.y = this.yaw;
     this.scene.add(this.carMesh);
 
-    const headL = new THREE.SpotLight(0xfff2d8, 18, 42, 0.42, 0.45, 1.1);
-    headL.position.set(-0.5, 0.7, -1.6);
-    headL.target.position.set(-0.5, 0.2, -12);
+    const headL = new THREE.SpotLight(0xfff6e4, 48, 78, 0.48, 0.38, 0.85);
+    headL.position.set(-0.5, 0.72, -1.6);
+    headL.target.position.set(-0.5, 0.12, -24);
     const headR = headL.clone();
     headR.position.x = 0.5;
     headR.target.position.x = 0.5;
@@ -156,6 +173,7 @@ export class GameEngine {
 
     this.input = new Input(canvas);
     this.fog.stamp(this.x, this.z, FOG_RADIUS);
+    this.refreshPreview();
 
     this.onResize = () => this.resize();
     this.onKey = (e) => {
@@ -248,6 +266,38 @@ export class GameEngine {
     this.renderer.render(this.scene, this.camera);
   }
 
+  private refreshPreview() {
+    const ahead = collectStreetAhead(this.world.roads, this.x, this.z, this.yaw);
+    this.previewPts = ahead.points;
+    updateStreetPreview(this.preview, ahead.points, ahead.width);
+    const punches: { x: number; z: number; r: number }[] = [];
+    const fx = -Math.sin(this.yaw);
+    const fz = -Math.cos(this.yaw);
+    for (const light of this.world.lights) {
+      const dx = light.x - this.x;
+      const dz = light.z - this.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist > LIGHT_SEE) continue;
+      const aheadDot = (dx * fx + dz * fz) / Math.max(dist, 0.01);
+      const onLane = this.previewPts.length > 1 && distToPolyline(this.previewPts, light.x, light.z) < 14;
+      if ((aheadDot > 0.18 && onLane) || dist < 22) {
+        punches.push({ x: light.x, z: light.z, r: dist < 28 ? 14 : 10 });
+      }
+    }
+    this.fog.setLane(ahead.points, ahead.width, punches);
+    const key = `${ahead.name ?? ""}:${ahead.points.length}:${ahead.points[0]?.x ?? 0}:${ahead.points[0]?.z ?? 0}`;
+    if (key !== this.previewKey) {
+      this.previewKey = key;
+      this.fog.revealCorridor(ahead.points, ahead.width);
+    }
+    if (typeof window !== "undefined") {
+      (window as Window & { __laneDebug?: { n: number; name: string | null } }).__laneDebug = {
+        n: ahead.points.length,
+        name: ahead.name,
+      };
+    }
+  }
+
   private step(dt: number) {
     if (this.finished) return;
     this.simTime += dt;
@@ -262,15 +312,16 @@ export class GameEngine {
 
     let cap = maxSpeed;
     let nearestLight: LightKind = "none";
-    let nearestD = 22;
+    let nearestD = LIGHT_SEE;
     for (const light of this.world.lights) {
       const lx = light.x - this.x;
       const lz = light.z - this.z;
       const dist = Math.hypot(lx, lz);
-      if (dist > 22) continue;
+      if (dist > LIGHT_SEE) continue;
       const ahead = (lx * fx + lz * fz) / Math.max(dist, 0.01);
       const state = lightState(light.phaseOffset, this.simTime);
-      if (ahead > 0.45 && dist < nearestD) {
+      const onLane = this.previewPts.length > 1 && distToPolyline(this.previewPts, light.x, light.z) < 16;
+      if (ahead > 0.35 && dist < nearestD && (onLane || dist < 28)) {
         nearestD = dist;
         nearestLight = state;
       }
@@ -321,6 +372,11 @@ export class GameEngine {
     }
 
     this.fog.stamp(this.x, this.z, FOG_RADIUS);
+    this.previewAcc += dt;
+    if (this.previewAcc > 0.1) {
+      this.previewAcc = 0;
+      this.refreshPreview();
+    }
 
     const destDist = Math.hypot(this.world.dest.x - this.x, this.world.dest.z - this.z);
     if (destDist < ARRIVE) {
@@ -404,11 +460,48 @@ export class GameEngine {
     this.camera.fov = 56 + Math.min(10, Math.abs(this.speed) * 0.42);
     this.camera.updateProjectionMatrix();
 
+    const lampRank = this.lampPos
+      .map((p) => ({ p, d: Math.hypot(p.x - this.x, p.z - this.z) }))
+      .filter((o) => o.d < 44)
+      .sort((a, b) => a.d - b.d);
+    for (let i = 0; i < this.curbLamps.length; i++) {
+      const pl = this.curbLamps[i]!;
+      const hit = lampRank[i];
+      if (!hit) {
+        pl.intensity = 0;
+        continue;
+      }
+      pl.position.set(hit.p.x, 5.05, hit.p.z);
+      pl.intensity = 14 * (1 - hit.d / 44);
+      pl.distance = 22;
+    }
+
     for (let i = 0; i < this.world.lights.length; i++) {
       const tl = this.world.lights[i]!;
       const g = this.lightGroups[i];
       if (!g) continue;
-      setSignal(g, lightState(tl.phaseOffset, this.simTime));
+      const state = lightState(tl.phaseOffset, this.simTime);
+      setSignal(g, state);
+      const dx = tl.x - this.x;
+      const dz = tl.z - this.z;
+      const dist = Math.hypot(dx, dz);
+      const ahead = (dx * fx + dz * fz) / Math.max(dist, 0.01);
+      const onLane = this.previewPts.length > 1 && distToPolyline(this.previewPts, tl.x, tl.z) < 14;
+      const explored = this.fog.sample(tl.x, tl.z) > 0.28;
+      const approaching = dist < LIGHT_SEE && ahead > 0.16 && (onLane || dist < 26);
+      const show = approaching || explored || dist < 18;
+      g.visible = show;
+      const head = g.userData.head as THREE.Group | undefined;
+      if (head && show) {
+        head.rotation.y = Math.atan2(this.x - g.position.x, this.z - g.position.z) - Math.PI / 2;
+      }
+      const glow = g.userData.glow as THREE.Sprite | undefined;
+      if (glow) {
+        glow.visible = approaching || (explored && dist < 50);
+        const s = Math.min(7.2, 2.1 + 32 / Math.max(8, dist));
+        glow.scale.set(s, s, 1);
+        glow.material.opacity = approaching ? (dist < 40 ? 0.95 : 0.7) : 0.45;
+      }
     }
 
     const destVis = this.fog.sample(this.world.dest.x, this.world.dest.z);
@@ -418,7 +511,7 @@ export class GameEngine {
     beacon.rotation.y += dt * 0.8;
     beacon.position.y = 3.8 + Math.sin(this.simTime * 2.2) * 0.12;
 
-    updateLabels(this.labels.sprites, this.fog, this.camera);
+    updateLabels(this.labels.sprites, this.fog, this.camera, this.previewPts);
     this.audio.update(this.speed, this.input.sample().throttle);
     this.drawMinimap();
   }
@@ -452,6 +545,18 @@ export class GameEngine {
       ctx.strokeStyle = "rgba(197,205,214,0.55)";
       ctx.stroke();
     }
+    if (this.previewPts.length > 1) {
+      ctx.beginPath();
+      ctx.strokeStyle = "rgba(236,231,220,0.92)";
+      ctx.lineWidth = 2.4;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.moveTo(sx(this.previewPts[0]!.x), sz(this.previewPts[0]!.z));
+      for (let i = 1; i < this.previewPts.length; i++) {
+        ctx.lineTo(sx(this.previewPts[i]!.x), sz(this.previewPts[i]!.z));
+      }
+      ctx.stroke();
+    }
     if (this.fog.sample(this.world.dest.x, this.world.dest.z) > 0.2) {
       ctx.fillStyle = "#ece7dc";
       ctx.beginPath();
@@ -478,6 +583,8 @@ export class GameEngine {
     this.speed = 0;
     this.fog.revealAll();
     this.destMarker.visible = true;
+    this.preview.group.visible = false;
+    for (const g of this.lightGroups) g.visible = true;
     this.drawRoutes();
     const shortest = Math.max(1, this.world.shortestMeters);
     const driven = Math.max(shortest * 0.15, this.driven);

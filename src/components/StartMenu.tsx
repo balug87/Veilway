@@ -43,7 +43,7 @@ export function StartMenu({ busy, error, onStart, onPractice }: Props) {
       return;
     }
     const t = setTimeout(() => {
-      void searchPlaces({ data: { query: q } })
+      void searchPlaces(q)
         .then(setHits)
         .catch(() => setHits([]));
     }, 280);
@@ -56,8 +56,8 @@ export function StartMenu({ busy, error, onStart, onPractice }: Props) {
         <p className="text-xs font-medium tracking-[0.22em] text-muted uppercase">Night wayfinding</p>
         <h1 className="font-display mt-2 text-4xl leading-tight tracking-[-0.03em] text-fg sm:text-5xl">Veilway</h1>
         <p className="mt-3 max-w-sm text-sm leading-relaxed text-muted">
-          Drive a real city through fog. Street names are your only map. Reach the destination, then see how close you
-          stayed to the shortest route.
+          Drive a real city through fog. The street you are on stays lit ahead so you can stay on the pavement;
+          signals glow as you approach. Street names are your map.
         </p>
 
         <form
@@ -181,8 +181,8 @@ export function StartMenu({ busy, error, onStart, onPractice }: Props) {
         </form>
 
         <p className="mt-6 text-xs leading-relaxed text-subtle">
-          W accelerate · S reverse · A / D steer · Space brake. On a phone, use the stick and pedals. Look for street
-          signs in the fog — there is no turn-by-turn.
+          W accelerate · S reverse · A / D steer · Space brake. Stay on the lit street; signals glow as they come
+          into range. Street names are the map — there is no turn-by-turn.
         </p>
       </div>
     </div>
