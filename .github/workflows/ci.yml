@@ -1,0 +1,30 @@
+name: CI
+
+# Same install and Pages build as pages.yml, without publishing. Dependabot
+# pull requests auto-merge, so this check has to fail when npm ci or the
+# build is broken. checkout/setup-node v7 run on Node 24; v4 targets Node 20,
+# which GitHub now forces forward and warns about.
+on:
+  pull_request:
+    branches: [main]
+
+# Read-only. This job never deploys.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run build:pages
